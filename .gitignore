@@ -1,1 +1,15 @@
 node_modules/
+
+# Local agent guidance and development notes
+/AGENTS.md
+/CLAUDE.md
+/GEMINI.md
+/NOTES.md
+/TODO.md
+/.agents/
+/.claude/
+/.codex/
+/docs/superpowers/
+
+# Local Git recovery artifacts
+/.git.broken.*
