@@ -1,9 +1,15 @@
 import 'dotenv/config';
-import { Telegraf } from 'telegraf';
 import sharp from 'sharp';
 import fs from 'fs';
 import path from 'path';
 import { memeTemplates } from './templates.js';
+
+// NOTE: telegraf's sendPhoto is NOT used for uploads. On Node >= 24, telegraf's
+// MultipartStream (a sandwich-stream Readable) deadlocks under every HTTP client
+// (node-fetch@2, native fetch, pipeline), so sendPhoto hangs forever and the bot
+// never replies. uploadPhoto() below builds a plain multipart Buffer and posts it
+// with native fetch, which works reliably.
+import { Telegraf } from 'telegraf';
 
 const token = process.env.BOT_TOKEN;
 if (!token) throw new Error('BOT_TOKEN not set in .env');
@@ -13,6 +19,35 @@ const dataDir = path.join(process.cwd(), 'data');
 if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir);
 
 const UPSCALE_FACTOR = 2;
+
+// Build a multipart/form-data body and POST it to Telegram's sendPhoto using native
+// fetch. Bypasses telegraf's MultipartStream, which deadlocks on Node >= 24 (see top).
+async function uploadPhoto(chatId, photoBuffer, caption = "") {
+    const boundary = `----jebbot${Math.random().toString(16).slice(2)}`;
+    const field = (name, filename, contentType) => {
+        let head = `--${boundary}\r\nContent-Disposition: form-data; name="${name}"`;
+        if (filename) head += `; filename="${filename}"`;
+        head += `\r\n`;
+        if (contentType) head += `Content-Type: ${contentType}\r\n`;
+        return head + `\r\n`;
+    };
+    const body = Buffer.concat([
+        Buffer.from(field('chat_id')),
+        Buffer.from(String(chatId)),
+        Buffer.from('\r\n'),
+        Buffer.from(field('photo', 'meme.jpg', 'image/jpeg')),
+        photoBuffer,
+        Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+    const res = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
+        method: 'POST',
+        headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+        body,
+    });
+    const json = await res.json();
+    if (!json.ok) throw new Error(`sendPhoto failed: ${json.description}`);
+    return json.result;
+}
 
 // ------------------------
 // WORD WRAPPING
@@ -41,6 +76,76 @@ function wrapToMaxLines(text, maxLines, maxCharsPerLine) {
 
     if (current.length > 0) lines.push(current.join(" "));
     return lines.slice(0, maxLines);
+}
+
+// ------------------------
+// TRADE OFFER
+// ------------------------
+// Largest font size whose wrapped lines fit the given box (Impact ~0.6 char width).
+function fitText(text, boxWidth, boxHeight) {
+    for (let size = Math.floor(boxHeight); size >= 12; size--) {
+        const maxChars = Math.max(4, Math.floor(boxWidth / (size * 0.6)));
+        const lines = wrapToMaxLines(text, 99, maxChars);
+        const longest = lines.reduce((max, line) => Math.max(max, line.length), 0);
+        if (lines.length * size * 1.2 <= boxHeight && longest * size * 0.6 <= boxWidth) {
+            return { size, lines };
+        }
+    }
+    return { size: 12, lines: wrapToMaxLines(text, 99, Math.max(4, Math.floor(boxWidth / 7.2))) };
+}
+
+function escapeXml(s) {
+    return s.replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' })[c]);
+}
+
+// Boxes under the template's "i receive:" / "you receive:" labels (fractions of the image).
+const TRADE_OFFER_BOX = { left: 0.19, right: 0.76, width: 0.34, top: 0.53, bottom: 0.80 };
+
+// "/tradeoffer <left> ; <right>" — also accepts "|", else splits the words in half.
+function splitTradeOffer(text) {
+    for (const sep of [';', '|']) {
+        const i = text.indexOf(sep);
+        if (i !== -1) return [text.slice(0, i).trim(), text.slice(i + 1).trim()];
+    }
+    const words = text.split(/\s+/).filter(Boolean);
+    const half = Math.ceil(words.length / 2);
+    return [words.slice(0, half).join(' '), words.slice(half).join(' ')];
+}
+
+async function renderTradeOffer(leftText, rightText) {
+    const templatePath = memeTemplates.tradeoffer;
+    const meta = await sharp(templatePath).metadata();
+    const width = Math.round(meta.width * UPSCALE_FACTOR);
+    const height = Math.round(meta.height * UPSCALE_FACTOR);
+
+    const base = await sharp(templatePath)
+        .ensureAlpha()
+        .resize({ width, height })
+        .toBuffer();
+
+    const boxWidth = width * TRADE_OFFER_BOX.width;
+    const boxHeight = height * (TRADE_OFFER_BOX.bottom - TRADE_OFFER_BOX.top);
+    const boxTop = height * TRADE_OFFER_BOX.top;
+
+    const parts = [];
+    for (const [cx, text] of [[TRADE_OFFER_BOX.left, leftText], [TRADE_OFFER_BOX.right, rightText]]) {
+        if (!text) continue;
+        const { size, lines } = fitText(text, boxWidth, boxHeight);
+        let y = boxTop + size + (boxHeight - lines.length * size * 1.2) / 2;
+        for (const line of lines) {
+            parts.push(
+                `<text x="${width * cx}" y="${y}" text-anchor="middle" font-family="Impact, Arial Black, sans-serif" font-size="${size}" fill="white" stroke="white" stroke-width="${Math.ceil(size / 12)}" stroke-linejoin="round" paint-order="stroke">${escapeXml(line)}</text>`
+            );
+            y += size * 1.2;
+        }
+    }
+
+    const svg = Buffer.from(`<svg width="${width}" height="${height}">${parts.join("")}</svg>`);
+
+    return sharp(base)
+        .composite([{ input: svg }])
+        .jpeg()
+        .toBuffer();
 }
 
 // ------------------------
@@ -192,14 +297,39 @@ ${svgParts.join("")}
 
         const result = await sharp(base)
             .composite([{ input: svg }])
-            .webp()
+            .jpeg()
             .toBuffer();
 
-        await ctx.replyWithPhoto({ source: result });
+        await uploadPhoto(ctx.chat.id, result);
 
     } catch (err) {
-        console.error(err);
-        ctx.reply("Error generating meme.");
+        console.error("meme error:", err?.message, err?.stack);
+        try { await ctx.reply("Error generating meme."); } catch (_) {}
+    }
+});
+
+bot.catch((err, ctx) => {
+    console.error("handler error:", err?.message, err?.stack);
+});
+
+// ------------------------
+// /tradeoffer COMMAND
+// ------------------------
+bot.command('tradeoffer', async (ctx) => {
+    const raw = ctx.message.text.split(' ').slice(1).join(' ').trim();
+    const [left, right] = splitTradeOffer(raw);
+
+    if (!left || !right) {
+        ctx.reply('Usage: /tradeoffer <what you receive> ; <what they receive>');
+        return;
+    }
+
+    try {
+        const image = await renderTradeOffer(left.toUpperCase(), right.toUpperCase());
+        await uploadPhoto(ctx.chat.id, image);
+    } catch (err) {
+        console.error("tradeoffer error:", err?.message, err?.stack);
+        try { await ctx.reply("Error generating meme."); } catch (_) {}
     }
 });
 
@@ -210,5 +340,9 @@ bot.command('memes', (ctx) => {
     ctx.reply(`Available templates: ${Object.keys(memeTemplates).join(", ")}`);
 });
 
-bot.launch();
+bot.launch()
+    .catch((err) => {
+        console.error("Bot failed to launch:", err.message);
+        process.exit(1);
+    });
 console.log("Bot is running...");
