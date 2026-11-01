@@ -134,7 +134,7 @@ async function renderTradeOffer(leftText, rightText) {
         let y = boxTop + size + (boxHeight - lines.length * size * 1.2) / 2;
         for (const line of lines) {
             parts.push(
-                `<text x="${width * cx}" y="${y}" text-anchor="middle" font-family="Impact, Arial Black, sans-serif" font-size="${size}" fill="white" stroke="white" stroke-width="${Math.ceil(size / 12)}" stroke-linejoin="round" paint-order="stroke">${escapeXml(line)}</text>`
+                `<text x="${width * cx}" y="${y}" text-anchor="middle" font-family="Anton, Impact, Arial Black, sans-serif" font-size="${size}" fill="white" stroke="black" stroke-width="${Math.ceil(size / 14)}" stroke-linejoin="round" paint-order="stroke">${escapeXml(line)}</text>`
             );
             y += size * 1.2;
         }
@@ -260,14 +260,14 @@ async function renderMeme(templatePath, rawText) {
 <svg width="${upscaledWidth}" height="${upscaledHeight}">
 <style>
 .meme {
-    font-family: Impact, Arial Black, sans-serif;
+    font-family: Anton, Impact, Arial Black, sans-serif;
     font-size: ${fontSize}px;
 
     fill: white;
 
-    /* thicker text without outline */
-    stroke: white;
-    stroke-width: ${Math.ceil(fontSize / 12)};
+    /* classic meme outline: black stroke behind the white fill */
+    stroke: black;
+    stroke-width: ${Math.ceil(fontSize / 14)};
     stroke-linejoin: round;
     paint-order: stroke;
 
