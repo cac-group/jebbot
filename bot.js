@@ -340,6 +340,21 @@ bot.command('memes', (ctx) => {
     ctx.reply(`Available templates: ${Object.keys(memeTemplates).join(", ")}`);
 });
 
+// ------------------------
+// UNKNOWN /command FALLBACK
+// ------------------------
+const HELP_TEXT = [
+    'Commands:',
+    '/meme <template> <text or TOP ; BOTTOM>',
+    '/tradeoffer <you receive> ; <they receive>',
+    '/memes — list available templates',
+].join('\n');
+
+bot.on('text', (ctx) => {
+    if (!ctx.message.text.trim().startsWith('/')) return;
+    return ctx.reply(HELP_TEXT);
+});
+
 bot.launch()
     .catch((err) => {
         console.error("Bot failed to launch:", err.message);
