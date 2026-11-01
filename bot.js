@@ -149,26 +149,9 @@ async function renderTradeOffer(leftText, rightText) {
 }
 
 // ------------------------
-// /meme COMMAND
+// CLASSIC TOP/BOTTOM MEME
 // ------------------------
-bot.command('meme', async (ctx) => {
-    const textParts = ctx.message.text.split(' ').slice(1);
-    if (textParts.length < 2) {
-        ctx.reply('Usage: /meme <template> <text or TOP ; BOTTOM>');
-        return;
-    }
-
-    const templateName = textParts[0].toLowerCase();
-    const rawText = textParts.slice(1).join(' ').trim().toUpperCase();
-
-    if (!memeTemplates[templateName]) {
-        ctx.reply(`Unknown template "${templateName}". Available: ${Object.keys(memeTemplates).join(", ")}`);
-        return;
-    }
-
-    const templatePath = memeTemplates[templateName];
-
-    try {
+async function renderMeme(templatePath, rawText) {
         // metadata so we can upscale
         const metadata = await sharp(templatePath).metadata();
         const upscaledWidth = Math.round(metadata.width * UPSCALE_FACTOR);
@@ -295,18 +278,53 @@ ${svgParts.join("")}
 </svg>
         `);
 
-        const result = await sharp(base)
+        return sharp(base)
             .composite([{ input: svg }])
             .jpeg()
             .toBuffer();
+}
 
-        await uploadPhoto(ctx.chat.id, result);
+// /meme <template> <text or TOP ; BOTTOM>
+bot.command('meme', async (ctx) => {
+    const parts = ctx.message.text.split(' ').slice(1);
+    if (parts.length < 2) {
+        ctx.reply('Usage: /meme <template> <text or TOP ; BOTTOM>');
+        return;
+    }
 
+    const key = parts[0].toLowerCase();
+    if (!memeTemplates[key]) {
+        ctx.reply(`Unknown template "${key}". Available: ${Object.keys(memeTemplates).join(", ")}`);
+        return;
+    }
+
+    await sendMeme(ctx, key, parts.slice(1).join(' '));
+});
+
+// Direct per-template commands: /bellcurve <text>, /jeb <text>, /intheroom <text>
+const DIRECT_COMMANDS = { bellcurve: 'bellcurve', jeb: 'jeb', intheroom: 'in-the-room' };
+
+async function sendMeme(ctx, templateKey, rawText) {
+    const text = rawText.trim();
+    if (!text) {
+        ctx.reply('Usage: <text or TOP ; BOTTOM> — e.g. /bellcurve hello ; world');
+        return;
+    }
+
+    try {
+        const image = await renderMeme(memeTemplates[templateKey], text.toUpperCase());
+        await uploadPhoto(ctx.chat.id, image);
     } catch (err) {
         console.error("meme error:", err?.message, err?.stack);
         try { await ctx.reply("Error generating meme."); } catch (_) {}
     }
-});
+}
+
+for (const [command, templateKey] of Object.entries(DIRECT_COMMANDS)) {
+    bot.command(command, async (ctx) => {
+        await sendMeme(ctx, templateKey, ctx.message.text.split(' ').slice(1).join(' '));
+    });
+}
 
 bot.catch((err, ctx) => {
     console.error("handler error:", err?.message, err?.stack);
@@ -346,6 +364,9 @@ bot.command('memes', (ctx) => {
 const HELP_TEXT = [
     'Commands:',
     '/meme <template> <text or TOP ; BOTTOM>',
+    '/bellcurve <text or TOP ; BOTTOM>',
+    '/jeb <text or TOP ; BOTTOM>',
+    '/intheroom <text or TOP ; BOTTOM>',
     '/tradeoffer <you receive> ; <they receive>',
     '/memes — list available templates',
 ].join('\n');
